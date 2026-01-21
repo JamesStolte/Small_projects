@@ -1,2 +1,2 @@
-# Small_projects
-Small programming projects that I may move to their own repository if they become big enough.
+# Godot Dice Game
+A small game I am working on in Godot
