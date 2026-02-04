@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Supabase Realtime Whiteboard (Local Frontend)</title>
+    <style>
+      body { margin: 0; overflow: hidden; }
+      #toolbar {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        background: #eee;
+        padding: 8px;
+        z-index: 10;
+        font-family: sans-serif;
+      }
+      #board {
+        position: absolute;
+        top: 40px; left: 0; right: 0; bottom: 0;
+      }
+    </style>
+    <!-- Supabase JS client from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <div id="toolbar">
+      Color:
+      <input type="color" id="color" value="#000000" />
+      Size:
+      <input type="number" id="size" value="3" min="1" max="20" />
+    </div>
+    <canvas id="board"></canvas>
+
+    <script>
+      // 1. CONFIG – put your own Supabase URL and anon public key here
+      const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+      const SUPABASE_ANON_KEY = 'YOUR_PUBLIC_ANON_KEY';
+
+      // 2. Initialize Supabase client (CDN gives a global "supabase" object) [web:24][web:28]
+      const { createClient } = supabase;
+      const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+      // 3. Setup canvas
+      const canvas = document.getElementById('board');
+      const ctx = canvas.getContext('2d');
+      const colorInput = document.getElementById('color');
+      const sizeInput = document.getElementById('size');
+
+      function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight - 40; // toolbar height
+      }
+      window.addEventListener('resize', resizeCanvas);
+      resizeCanvas();
+
+      let drawing = false;
+      let lastX = 0;
+      let lastY = 0;
+
+      function getMousePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+        };
+      }
+
+      function startDraw(e) {
+        drawing = true;
+        const pos = getMousePos(e);
+        lastX = pos.x;
+        lastY = pos.y;
+      }
+
+      function drawLocalLine(x1, y1, x2, y2, color, size) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = size;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+
+      async function drawMove(e) {
+        if (!drawing) return;
+        const pos = getMousePos(e);
+        const x = pos.x;
+        const y = pos.y;
+        const color = colorInput.value;
+        const size = parseInt(sizeInput.value, 10);
+
+        // Draw on local canvas
+        drawLocalLine(lastX, lastY, x, y, color, size);
+
+        // 4. Send stroke to Supabase by inserting into a table "strokes" [web:25][web:26]
+        // Table "strokes" (id uuid, x1 float, y1 float, x2 float, y2 float, color text, size int, created_at timestamptz)
+        await client.from('strokes').insert({
+          x1: lastX,
+          y1: lastY,
+          x2: x,
+          y2: y,
+          color,
+          size,
+        });
+
+        lastX = x;
+        lastY = y;
+      }
+
+      function endDraw() {
+        drawing = false;
+      }
+
+      canvas.addEventListener('mousedown', startDraw);
+      canvas.addEventListener('mousemove', drawMove);
+      canvas.addEventListener('mouseup', endDraw);
+      canvas.addEventListener('mouseleave', endDraw);
+
+      // 5. Subscribe to realtime changes from Supabase "strokes" table [web:25]
+      const channel = client
+        .channel('realtime:strokes')
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'strokes' },
+          payload => {
+            const s = payload.new;
+            // Draw stroke from other users
+            drawLocalLine(s.x1, s.y1, s.x2, s.y2, s.color, s.size);
+          }
+        )
+        .subscribe();
+
+      // 6. Optional: load existing strokes when you open the page
+      async function loadHistory() {
+        const { data, error } = await client
+          .from('strokes')
+          .select('*')
+          .order('created_at', { ascending: true });
+        if (error) {
+          console.error(error);
+          return;
+        }
+        data.forEach(s => {
+          drawLocalLine(s.x1, s.y1, s.x2, s.y2, s.color, s.size);
+        });
+      }
+      loadHistory();
+    </script>
+  </body>
+</html>
